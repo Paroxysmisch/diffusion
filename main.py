@@ -44,7 +44,7 @@ def main():
         shuffle=False,
     )
 
-    trainer = L.Trainer(max_epochs=10, logger=wandb_logger, check_val_every_n_epoch=1)
+    trainer = L.Trainer(max_epochs=200, logger=wandb_logger, check_val_every_n_epoch=1)
     model = UNet2DDiffusionModel(hyperparameters)
     trainer.fit(model, train_dataloader, validation_dataloader)
 
