@@ -8,9 +8,23 @@ dependencies = [
     "diffusers>=0.33.1",
     "lightning>=2.5.2",
     "torch>=2.7.1",
+    "torch-fidelity>=0.3.0",
     "torchaudio>=2.7.1",
     "torchmetrics>=1.7.3",
     "torchvision>=0.22.1",
     "tqdm>=4.67.1",
     "wandb>=0.20.1",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+  { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
