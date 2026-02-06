@@ -1,5 +1,4 @@
 version = 1
-revision = 1
 requires-python = ">=3.12"
 resolution-markers = [
     "sys_platform == 'linux'",
@@ -189,6 +188,7 @@ dependencies = [
     { name = "lightning" },
     { name = "torch" },
     { name = "torchaudio" },
+    { name = "torchmetrics" },
     { name = "torchvision" },
     { name = "tqdm" },
     { name = "wandb" },
@@ -200,6 +200,7 @@ requires-dist = [
     { name = "lightning", specifier = ">=2.5.2" },
     { name = "torch", specifier = ">=2.7.1" },
     { name = "torchaudio", specifier = ">=2.7.1" },
+    { name = "torchmetrics", specifier = ">=1.7.3" },
     { name = "torchvision", specifier = ">=0.22.1" },
     { name = "tqdm", specifier = ">=4.67.1" },
     { name = "wandb", specifier = ">=0.20.1" },
