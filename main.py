@@ -82,7 +82,9 @@ def main():
     checkpoint_callback = ModelCheckpoint(
         dirpath="checkpoints/",
         filename="diffusion-cifar10-{epoch:04d}",
-        every_n_epochs=5,
+        every_n_epochs=10,
+        monitor="val/loss",
+        mode="min",
         save_top_k=5,  # Set to -1 to keep all checkpoints, or n to keep the n best
     )
 
