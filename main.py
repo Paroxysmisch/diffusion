@@ -17,35 +17,43 @@ class Hyperparameters:
 
 class EMACallback(Callback):
     def __init__(self, decay=0.9999):
+        super().__init__()
         self.decay = decay
         self.ema_weights = None
+        self.original_weights = None
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         if self.ema_weights is None:
-            # Initialize EMA weights with current model weights
+            # Initialize on the same device as the model
             self.ema_weights = {
                 k: v.clone().detach() for k, v in pl_module.state_dict().items()
             }
+            return
 
         with torch.no_grad():
             for k, v in pl_module.state_dict().items():
+                # In-place update is fast on GH200
                 self.ema_weights[k].copy_(
                     self.decay * self.ema_weights[k] + (1 - self.decay) * v
                 )
 
     def on_validation_start(self, trainer, pl_module):
-        # Swap weights to EMA for validation/sampling
-        self.original_weights = {
-            k: v.clone().detach() for k, v in pl_module.state_dict().items()
-        }
-        pl_module.load_state_dict(self.ema_weights)
+        if self.ema_weights is not None:
+            # Store current weights on CPU to save GPU VRAM
+            self.original_weights = {
+                k: v.cpu().clone() for k, v in pl_module.state_dict().items()
+            }
+            # Load EMA weights (ensure they stay on GPU if that's where pl_module is)
+            pl_module.load_state_dict(self.ema_weights, strict=True)
 
     def on_validation_end(self, trainer, pl_module):
-        # Swap back to original weights for further training
-        pl_module.load_state_dict(self.original_weights)
-
+        # Only swap back if we actually performed a swap in on_validation_start
+        if self.original_weights is not None:
+            pl_module.load_state_dict(self.original_weights)
+            self.original_weights = None  # Clear ref to free CPU memory
 
 def main():
+    torch.set_float32_matmul_precision("medium")
     hyperparameters = Hyperparameters()
     wandb_logger = WandbLogger(
         project="diffusion", entity="paroxysmisch-university-of-cambridge"
@@ -65,6 +73,8 @@ def main():
         train_dataset,
         batch_size=hyperparameters.batch_size,
         shuffle=True,
+        num_workers=32,
+        pin_memory=True,
     )
 
     validation_dataset = datasets.CIFAR10(
@@ -77,6 +87,8 @@ def main():
         validation_dataset,
         batch_size=hyperparameters.batch_size,
         shuffle=False,
+        num_workers=32,
+        pin_memory=True,
     )
 
     checkpoint_callback = ModelCheckpoint(

@@ -28,6 +28,7 @@ class UNet2DDiffusionModel(L.LightningModule):
             ),
             dropout=0.1,  # DDPM uses 0.1 dropout
         )
+        self.model = torch.compile(self.model)
         self.hyperparameters = hyperparameters
 
         # DDPM paper noise schedule: Linear 1e-4 to 0.02
@@ -60,7 +61,7 @@ class UNet2DDiffusionModel(L.LightningModule):
 
         # Rescale from [-1, 1] to [0, 1] and then to uint8 for FID
         image = (image / 2 + 0.5).clamp(0, 1)
-        return (image * 255).to(torch.uint8).cpu()
+        return (image * 255).to(torch.uint8)
 
     def training_step(self, images_batch, batch_idx):
         # images_batch is often a list/tuple: [images, labels]
@@ -105,14 +106,22 @@ class UNet2DDiffusionModel(L.LightningModule):
         self.log("val/loss", loss, prog_bar=True)
 
     def on_validation_epoch_end(self):
-        # 3. Compute FID ONCE at the end of the epoch
-        if (self.current_epoch) % 10 == 0:
-            fake_images = self.forward(batch_size=64)  # Generate 64 images
+        # 1. Only run FID if it's the right epoch
+        if self.current_epoch % 10 == 0:
+            # 2. Generate fake images
+            fake_images = self.forward(batch_size=64)
             self.fid.update(fake_images, real=False)
 
-            fid_score = self.fid.compute()
-            self.log("val/fid", fid_score, prog_bar=True)
-            self.fid.reset()
+            # 3. Check if we have both real and fake samples
+            # real_features_num_samples is the documented way to check
+            if self.fid.real_features_num_samples > 0 and self.fid.fake_features_num_samples > 0:
+                fid_score = self.fid.compute()
+                self.log("val/fid", fid_score, prog_bar=True)
+                self.fid.reset()
+            else:
+                # This will trigger during the Sanity Check
+                print(f"Skipping FID: Real={self.fid.real_features_num_samples}, "
+                      f"Fake={self.fid.fake_features_num_samples}")
 
     def configure_optimizers(self):
         # DDPM used Adam with a constant 2e-4 learning rate
