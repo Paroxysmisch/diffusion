@@ -11,7 +11,7 @@ from modules import UNet2DDiffusionModel
 
 @dataclasses.dataclass
 class Hyperparameters:
-    batch_size: int = 128
+    batch_size: int = 256
     num_timesteps: int = 1000
 
 
@@ -105,7 +105,7 @@ def main():
     trainer = L.Trainer(
         max_epochs=2000,
         logger=wandb_logger,
-        check_val_every_n_epoch=10,
+        check_val_every_n_epoch=1,
         accelerator="cuda",
         callbacks=[checkpoint_callback, ema_callback],
     )

@@ -41,7 +41,7 @@ class UNet2DDiffusionModel(L.LightningModule):
         )
         # Initialize FID metric (32x32 for CIFAR, features=64 or 2048)
         # 2048 is standard, but 64 is faster for "proxy" checks
-        self.fid = FrechetInceptionDistance(feature=64)
+        self.fid = FrechetInceptionDistance(feature=64, reset_real_features=False)
         self.save_hyperparameters()
 
     @torch.no_grad()
@@ -62,6 +62,22 @@ class UNet2DDiffusionModel(L.LightningModule):
         # Rescale from [-1, 1] to [0, 1] and then to uint8 for FID
         image = (image / 2 + 0.5).clamp(0, 1)
         return (image * 255).to(torch.uint8)
+
+    def on_train_start(self):
+        # Prime FID with real images from the train dataloader once
+        # This ensures the 'real' distribution is set before any validation runs
+        print("Priming FID with real images...")
+        train_loader = self.trainer.train_dataloader
+
+        # Grab a few batches of real images
+        for i, batch in enumerate(train_loader):
+            if i >= 10: break  # 10 batches is plenty for a feature=64 proxy
+
+            images = batch[0] if isinstance(batch, (list, tuple)) else batch
+            real_uint8 = ((images / 2 + 0.5).clamp(0, 1) * 255).to(torch.uint8)
+
+            # Ensure images are on the correct device for the Inception model
+            self.fid.update(real_uint8.to(self.device), real=True)
 
     def training_step(self, images_batch, batch_idx):
         # images_batch is often a list/tuple: [images, labels]
@@ -106,22 +122,14 @@ class UNet2DDiffusionModel(L.LightningModule):
         self.log("val/loss", loss, prog_bar=True)
 
     def on_validation_epoch_end(self):
-        # 1. Only run FID if it's the right epoch
-        if self.current_epoch % 10 == 0:
-            # 2. Generate fake images
+        if self.current_epoch > 0:
+            self.fid.reset()
             fake_images = self.forward(batch_size=64)
-            self.fid.update(fake_images, real=False)
+            # Ensure fake images are moved to device
+            self.fid.update(fake_images.to(self.device), real=False)
 
-            # 3. Check if we have both real and fake samples
-            # real_features_num_samples is the documented way to check
-            if self.fid.real_features_num_samples > 0 and self.fid.fake_features_num_samples > 0:
-                fid_score = self.fid.compute()
-                self.log("val/fid", fid_score, prog_bar=True)
-                self.fid.reset()
-            else:
-                # This will trigger during the Sanity Check
-                print(f"Skipping FID: Real={self.fid.real_features_num_samples}, "
-                      f"Fake={self.fid.fake_features_num_samples}")
+            fid_score = self.fid.compute()
+            self.log("val/fid", fid_score, prog_bar=True, sync_dist=True)
 
     def configure_optimizers(self):
         # DDPM used Adam with a constant 2e-4 learning rate
