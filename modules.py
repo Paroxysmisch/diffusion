@@ -3,6 +3,8 @@ import lightning as L
 import torch
 from torchmetrics.image.fid import FrechetInceptionDistance
 
+import padre
+
 
 class UNet2DDiffusionModel(L.LightningModule):
     def __init__(self, hyperparameters):
@@ -28,6 +30,16 @@ class UNet2DDiffusionModel(L.LightningModule):
             ),
             dropout=0.1,  # DDPM uses 0.1 dropout
         )
+
+        temb_dim = 128 * 4
+
+        for _, module in self.model.named_modules():
+            # In diffusers, the class name is usually 'Attention'
+            if module.__class__.__name__ == "Attention":
+                padre.inject_multi_modal_padre(
+                    module, degree=3, conv_kernel=3, temb_dim=temb_dim
+                )
+
         self.model = torch.compile(self.model)
         self.hyperparameters = hyperparameters
 
@@ -71,7 +83,8 @@ class UNet2DDiffusionModel(L.LightningModule):
 
         # Grab a few batches of real images
         for i, batch in enumerate(train_loader):
-            if i >= 10: break  # 10 batches is plenty for a feature=64 proxy
+            if i >= 10:
+                break  # 10 batches is plenty for a feature=64 proxy
 
             images = batch[0] if isinstance(batch, (list, tuple)) else batch
             real_uint8 = ((images / 2 + 0.5).clamp(0, 1) * 255).to(torch.uint8)
