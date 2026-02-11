@@ -235,7 +235,7 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
             latents = self.scheduler.step(model_output, t, latents).prev_sample
 
         # 4. Decode latents back to pixels
-        latents = 1 / 0.18215 * latents
+        latents = 1 / self.vae.config.scaling_factor * latents
         image = self.vae.decode(latents).sample
 
         image = (image / 2 + 0.5).clamp(0, 1)
@@ -274,8 +274,8 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
         with torch.no_grad():
             # latents shape is roughly [batch, 4, H/8, W/8]
             latents = self.vae.encode(images).latent_dist.sample()
-            # Scale latents (Stable Diffusion uses a scaling factor of 0.18215)
-            latents = latents * 0.18215
+            # Scale latents (Stable Diffusion uses a scaling factor of self.vae.config.scaling_factor)
+            latents = latents * self.vae.config.scaling_factor
 
         noise = torch.randn_like(latents)
         timesteps = torch.randint(
@@ -302,18 +302,19 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
         with torch.no_grad():
             # latents shape is roughly [batch, 4, H/8, W/8]
             latents = self.vae.encode(images).latent_dist.sample()
-            # Scale latents (Stable Diffusion uses a scaling factor of 0.18215)
-            latents = latents * 0.18215
+            # Scale latents (Stable Diffusion uses a scaling factor of self.vae.config.scaling_factor)
+            latents = latents * self.vae.config.scaling_factor
 
+        noise = torch.randn_like(latents)
         timesteps = torch.full((latents.shape[0],), 500, device=self.device).long()
         noisy_latents = self.scheduler.add_noise(
-            latents, torch.randn_like(latents), timesteps
+            latents, noise, timesteps
         )
 
         noise_pred = self.model(
             noisy_latents, timesteps, encoder_hidden_states=encoder_hidden_states
         ).sample
-        self.log("val/loss", F.mse_loss(noise_pred, torch.randn_like(latents)))
+        self.log("val/loss", F.mse_loss(noise_pred, noise))
 
     def on_validation_epoch_end(self):
         if self.current_epoch > 0:
@@ -325,4 +326,4 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
             self.log("val/fid", self.fid.compute(), prog_bar=True, sync_dist=True)
 
     def configure_optimizers(self):
-        return torch.optim.AdamW(self.model.parameters(), lr=2e-4)
+        return torch.optim.AdamW(self.model.parameters(), lr=2e-5)
