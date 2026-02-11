@@ -167,9 +167,9 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
         # 2. Configure UNet2DConditionModel
         # This model uses cross-attention to "look" at text embeddings
         self.model = diffusers.UNet2DConditionModel(
-            sample_size=32,
-            in_channels=3,
-            out_channels=3,
+            sample_size=hyperparameters.resolution // 8,
+            in_channels=4,
+            out_channels=4,
             layers_per_block=2,
             block_out_channels=(128, 256, 256, 256),
             down_block_types=(
@@ -187,6 +187,10 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
             cross_attention_dim=512,  # Must match CLIP-base output dim
             dropout=0.1,
         )
+
+        # In __init__
+        self.vae = diffusers.AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse")
+        self.vae.requires_grad_(False)  # Keep the VAE frozen
 
         self.scheduler = diffusers.DDPMScheduler(
             num_train_timesteps=1000,
@@ -218,14 +222,21 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
         encoder_hidden_states = self._get_text_embeddings(prompts)
 
         self.scheduler.set_timesteps(1000)
-        image = torch.randn((batch_size, 3, 32, 32), device=device)
+        latent_size = self.model.config.sample_size
+        latents = torch.randn(
+            (len(prompts), 4, latent_size, latent_size), device=self.device
+        )
 
         for t in self.scheduler.timesteps:
             # UNet2DConditionModel requires encoder_hidden_states
             model_output = self.model(
-                image, t, encoder_hidden_states=encoder_hidden_states
+                latents, t, encoder_hidden_states=encoder_hidden_states
             ).sample
-            image = self.scheduler.step(model_output, t, image).prev_sample
+            latents = self.scheduler.step(model_output, t, latents).prev_sample
+
+        # 4. Decode latents back to pixels
+        latents = 1 / 0.18215 * latents
+        image = self.vae.decode(latents).sample
 
         image = (image / 2 + 0.5).clamp(0, 1)
         return (image * 255).to(torch.uint8)
@@ -260,18 +271,24 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
         p_drop = 0.1
         prompts = [p if random.random() > p_drop else "" for p in prompts]
 
-        noise = torch.randn_like(images)
+        with torch.no_grad():
+            # latents shape is roughly [batch, 4, H/8, W/8]
+            latents = self.vae.encode(images).latent_dist.sample()
+            # Scale latents (Stable Diffusion uses a scaling factor of 0.18215)
+            latents = latents * 0.18215
+
+        noise = torch.randn_like(latents)
         timesteps = torch.randint(
-            0, 1000, (images.shape[0],), device=self.device
+            0, 1000, (latents.shape[0],), device=self.device
         ).long()
-        noisy_images = self.scheduler.add_noise(images, noise, timesteps)
+        noisy_latents = self.scheduler.add_noise(images, noise, timesteps)
 
         # Get text conditioning
         encoder_hidden_states = self._get_text_embeddings(prompts)
 
         # Predict noise
         noise_pred = self.model(
-            noisy_images, timesteps, encoder_hidden_states=encoder_hidden_states
+            noisy_latents, timesteps, encoder_hidden_states=encoder_hidden_states
         ).sample
 
         loss = F.mse_loss(noise_pred, noise)
@@ -282,15 +299,21 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
         images, prompts = batch
         encoder_hidden_states = self._get_text_embeddings(prompts)
 
-        timesteps = torch.full((images.shape[0],), 500, device=self.device).long()
-        noisy_images = self.scheduler.add_noise(
-            images, torch.randn_like(images), timesteps
+        with torch.no_grad():
+            # latents shape is roughly [batch, 4, H/8, W/8]
+            latents = self.vae.encode(images).latent_dist.sample()
+            # Scale latents (Stable Diffusion uses a scaling factor of 0.18215)
+            latents = latents * 0.18215
+
+        timesteps = torch.full((latents.shape[0],), 500, device=self.device).long()
+        noisy_latents = self.scheduler.add_noise(
+            latents, torch.randn_like(images), timesteps
         )
 
         noise_pred = self.model(
-            noisy_images, timesteps, encoder_hidden_states=encoder_hidden_states
+            noisy_latents, timesteps, encoder_hidden_states=encoder_hidden_states
         ).sample
-        self.log("val/loss", F.mse_loss(noise_pred, torch.randn_like(images)))
+        self.log("val/loss", F.mse_loss(noise_pred, torch.randn_like(latents)))
 
     def on_validation_epoch_end(self):
         if self.current_epoch > 0:
