@@ -292,7 +292,7 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
         ).sample
 
         loss = F.mse_loss(noise_pred, noise)
-        self.log("train/loss", loss, prog_bar=True)
+        self.log("train/loss", loss, prog_bar=True, batch_size=len(prompts))
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -314,7 +314,7 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
         noise_pred = self.model(
             noisy_latents, timesteps, encoder_hidden_states=encoder_hidden_states
         ).sample
-        self.log("val/loss", F.mse_loss(noise_pred, noise))
+        self.log("val/loss", F.mse_loss(noise_pred, noise), batch_size=len(prompts))
 
     def on_validation_epoch_end(self):
         if self.current_epoch > 0:
@@ -323,7 +323,7 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
             test_prompts = ["a dog"] * 32 + ["an airplane"] * 32
             fake_images = self.forward(test_prompts)
             self.fid.update(fake_images.to(self.device), real=False)
-            self.log("val/fid", self.fid.compute(), prog_bar=True, sync_dist=True)
+            self.log("val/fid", self.fid.compute(), prog_bar=True, sync_dist=True, batch_size=len(test_prompts))
 
     def configure_optimizers(self):
         return torch.optim.AdamW(self.model.parameters(), lr=2e-5)

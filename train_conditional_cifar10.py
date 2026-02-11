@@ -16,6 +16,7 @@ from modules import UNet2DConditionDiffusionModel
 class Hyperparameters:
     batch_size: int = 256
     num_timesteps: int = 1000
+    resolution: int = 32
 
 
 class TextConditionedCIFAR(torch.utils.data.Dataset):
@@ -51,26 +52,11 @@ class TextConditionedCIFAR(torch.utils.data.Dataset):
         return image, prompt
 
 
-def coco_collate_fn(batch):
-    """
-    COCO returns a list of 5 captions per image.
-    This function picks ONE random caption per image to train on.
-    """
-    images = []
-    prompts = []
-    for img, captions in batch:
-        images.append(img)
-        # Select one random caption from the 5 available
-        prompts.append(random.choice(captions))
-
-    return torch.stack(images), prompts
-
-
 def main():
     torch.set_float32_matmul_precision("medium")
     hyperparameters = Hyperparameters()
     wandb_logger = WandbLogger(
-        project="diffusion-coco", entity="paroxysmisch-university-of-cambridge"
+        project="diffusion-conditional-cifar10", entity="paroxysmisch-university-of-cambridge"
     )
 
     transform = transforms.Compose(
