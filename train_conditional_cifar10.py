@@ -14,7 +14,7 @@ from modules import UNet2DConditionDiffusionModel
 
 @dataclasses.dataclass
 class Hyperparameters:
-    batch_size: int = 256
+    batch_size: int = 512
     num_timesteps: int = 1000
     resolution: int = 32
 

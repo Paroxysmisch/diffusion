@@ -174,19 +174,18 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
             block_out_channels=(128, 256, 256, 256),
             down_block_types=(
                 "CrossAttnDownBlock2D",  # Use CrossAttn blocks for text
-                "CrossAttnDownBlock2D",
-                "CrossAttnDownBlock2D",
                 "DownBlock2D",
             ),
             up_block_types=(
                 "UpBlock2D",
                 "CrossAttnUpBlock2D",
-                "CrossAttnUpBlock2D",
-                "CrossAttnUpBlock2D",
             ),
             cross_attention_dim=512,  # Must match CLIP-base output dim
             dropout=0.1,
         )
+
+        self.model = torch.compile(self.model)
+        self.hyperparameters = hyperparameters
 
         # In __init__
         self.vae = diffusers.AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse")
