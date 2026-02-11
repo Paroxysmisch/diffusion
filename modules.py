@@ -1,3 +1,5 @@
+import random
+
 import diffusers
 import lightning as L
 import torch
@@ -254,6 +256,10 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
     def training_step(self, batch, batch_idx):
         images, prompts = batch  # Assumes dataloader returns (Image, String)
 
+        # Classifier-Free Guidance
+        p_drop = 0.1
+        prompts = [p if random.random() > p_drop else "" for p in prompts]
+
         noise = torch.randn_like(images)
         timesteps = torch.randint(
             0, 1000, (images.shape[0],), device=self.device
@@ -285,7 +291,6 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
             noisy_images, timesteps, encoder_hidden_states=encoder_hidden_states
         ).sample
         self.log("val/loss", F.mse_loss(noise_pred, torch.randn_like(images)))
-
 
     def on_validation_epoch_end(self):
         if self.current_epoch > 0:
