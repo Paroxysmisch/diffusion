@@ -16,7 +16,7 @@ from modules import UNet2DConditionDiffusionModel
 class Hyperparameters:
     batch_size: int = 256
     num_timesteps: int = 1000
-    resolution: int = 64
+    resolution: int = 128
 
 
 def coco_collate_fn(batch):

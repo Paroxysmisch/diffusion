@@ -281,7 +281,7 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
         timesteps = torch.randint(
             0, 1000, (latents.shape[0],), device=self.device
         ).long()
-        noisy_latents = self.scheduler.add_noise(images, noise, timesteps)
+        noisy_latents = self.scheduler.add_noise(latents, noise, timesteps)
 
         # Get text conditioning
         encoder_hidden_states = self._get_text_embeddings(prompts)
@@ -307,7 +307,7 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
 
         timesteps = torch.full((latents.shape[0],), 500, device=self.device).long()
         noisy_latents = self.scheduler.add_noise(
-            latents, torch.randn_like(images), timesteps
+            latents, torch.randn_like(latents), timesteps
         )
 
         noise_pred = self.model(
