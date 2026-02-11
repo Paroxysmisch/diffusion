@@ -103,7 +103,7 @@ def main():
     ema_callback = EMACallback(decay=0.9999)
 
     trainer = L.Trainer(
-        max_epochs=2000,
+        max_epochs=750,
         logger=wandb_logger,
         check_val_every_n_epoch=10,
         accelerator="cuda",

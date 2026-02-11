@@ -6,10 +6,11 @@ import torch.nn as nn
 
 class MultiModalPADReProcessor:
     def __init__(self, degree=3, conv_kernel=3):
+        super().__init__()
         self.degree = degree
         self.conv_kernel = conv_kernel
 
-    def __call__(
+    def forward(
         self,
         attn: "Attention",
         hidden_states: torch.Tensor,
@@ -86,6 +87,7 @@ class MultiModalPADReProcessor:
 
         return hidden_states + residual if attn.residual_connection else hidden_states
 
+
 def inject_multi_modal_padre(attn: nn.Module, temb_dim=1280, degree=3, conv_kernel=3):
     device, dtype = attn.to_q.weight.device, attn.to_q.weight.dtype
     dim = attn.inner_dim
@@ -115,9 +117,7 @@ def inject_multi_modal_padre(attn: nn.Module, temb_dim=1280, degree=3, conv_kern
         [nn.Linear(dim, dim, bias=False) for _ in range(degree - 1)]
     ).to(device, dtype)
 
-    attn.padre_W = nn.Parameter(
-        torch.randn(degree, dim, device=device, dtype=dtype)
-    )
+    attn.padre_W = nn.Parameter(torch.randn(degree, dim, device=device, dtype=dtype))
     attn.padre_L = nn.Parameter(torch.zeros(dim, device=device, dtype=dtype))
 
     # Add time embedding projection
@@ -126,6 +126,4 @@ def inject_multi_modal_padre(attn: nn.Module, temb_dim=1280, degree=3, conv_kern
         nn.SiLU(), nn.Linear(temb_dim, attn.inner_dim)
     ).to(attn.to_q.weight.device, attn.to_q.weight.dtype)
 
-    attn.set_processor(
-        MultiModalPADReProcessor(degree=degree, conv_kernel=conv_kernel)
-    )
+    attn.set_processor(MultiModalPADReProcessor(degree=degree, conv_kernel=conv_kernel))
