@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
 from main import EMACallback
-from modules import UNet2DConditionDiffusionModel
+from modules import UNet2DConditionPixelDiffusionModel
 
 
 @dataclasses.dataclass
@@ -95,19 +95,19 @@ def main():
         every_n_epochs=10,
         monitor="val/loss",
         mode="min",
-        save_top_k=5,  # Set to -1 to keep all checkpoints, or n to keep the n best
+        save_top_k=10,  # Set to -1 to keep all checkpoints, or n to keep the n best
     )
 
     ema_callback = EMACallback(decay=0.9999)
 
     trainer = L.Trainer(
-        max_epochs=750,
+        max_epochs=250,
         logger=wandb_logger,
         check_val_every_n_epoch=10,
         accelerator="cuda",
         callbacks=[checkpoint_callback, ema_callback],
     )
-    model = UNet2DConditionDiffusionModel(hyperparameters)
+    model = UNet2DConditionPixelDiffusionModel(hyperparameters)
     trainer.fit(model, train_dataloader, validation_dataloader)
 
 

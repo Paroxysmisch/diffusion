@@ -176,13 +176,13 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
                 "CrossAttnDownBlock2D",  # 64x64
                 "CrossAttnDownBlock2D",  # 32x32
                 "CrossAttnDownBlock2D",  # 16x16
-                "DownBlock2D",           # 8x8 (Bottleneck)
+                "DownBlock2D",  # 8x8 (Bottleneck)
             ),
             up_block_types=(
-                "UpBlock2D",             # 8x8
-                "CrossAttnUpBlock2D",    # 16x16
-                "CrossAttnUpBlock2D",    # 32x32
-                "CrossAttnUpBlock2D",    # 64x64
+                "UpBlock2D",  # 8x8
+                "CrossAttnUpBlock2D",  # 16x16
+                "CrossAttnUpBlock2D",  # 32x32
+                "CrossAttnUpBlock2D",  # 64x64
             ),
             cross_attention_dim=512,  # Must match CLIP-base output dim
             dropout=0.1,
@@ -310,9 +310,7 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
 
         noise = torch.randn_like(latents)
         timesteps = torch.full((latents.shape[0],), 500, device=self.device).long()
-        noisy_latents = self.scheduler.add_noise(
-            latents, noise, timesteps
-        )
+        noisy_latents = self.scheduler.add_noise(latents, noise, timesteps)
 
         noise_pred = self.model(
             noisy_latents, timesteps, encoder_hidden_states=encoder_hidden_states
@@ -326,7 +324,177 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
             test_prompts = ["a dog"] * 32 + ["an airplane"] * 32
             fake_images = self.forward(test_prompts)
             self.fid.update(fake_images.to(self.device), real=False)
-            self.log("val/fid", self.fid.compute(), prog_bar=True, sync_dist=True, batch_size=len(test_prompts))
+            self.log(
+                "val/fid",
+                self.fid.compute(),
+                prog_bar=True,
+                sync_dist=True,
+                batch_size=len(test_prompts),
+            )
+
+    def configure_optimizers(self):
+        return torch.optim.AdamW(self.model.parameters(), lr=2e-5)
+
+
+class UNet2DConditionPixelDiffusionModel(L.LightningModule):
+    def __init__(self, hyperparameters):
+        super().__init__()
+
+        # 1. Load Text Encoder and Tokenizer
+        self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
+        self.text_encoder = CLIPTextModel.from_pretrained(
+            "openai/clip-vit-base-patch32"
+        )
+        self.text_encoder.requires_grad_(False)  # Keep the encoder frozen
+
+        # 2. Configure UNet2DConditionModel
+        # This model uses cross-attention to "look" at text embeddings
+        self.model = diffusers.UNet2DConditionModel(
+            sample_size=hyperparameters.resolution,
+            in_channels=3,
+            out_channels=3,
+            layers_per_block=2,
+            block_out_channels=(128, 256, 512),
+            down_block_types=(
+                "CrossAttnDownBlock2D",  # 32x32
+                "CrossAttnDownBlock2D",  # 16x16
+                "DownBlock2D",  # 8x8 (Bottleneck)
+            ),
+            up_block_types=(
+                "UpBlock2D",  # 8x8
+                "CrossAttnUpBlock2D",  # 16x16
+                "CrossAttnUpBlock2D",  # 32x32
+            ),
+            cross_attention_dim=512,  # Must match CLIP-base output dim
+            dropout=0.1,
+        )
+
+        self.model = torch.compile(self.model)
+        self.hyperparameters = hyperparameters
+
+        self.scheduler = diffusers.DDPMScheduler(
+            num_train_timesteps=1000,
+            beta_schedule="linear",
+            prediction_type="epsilon",
+        )
+
+        self.fid = FrechetInceptionDistance(feature=256, reset_real_features=False)
+        self.save_hyperparameters()
+
+    def _get_text_embeddings(self, prompts):
+        # Helper to convert strings to CLIP embeddings
+        inputs = self.tokenizer(
+            prompts,
+            padding="max_length",
+            max_length=self.tokenizer.model_max_length,
+            truncation=True,
+            return_tensors="pt",
+        ).to(self.device)
+
+        # Output shape: [batch, sequence_length, 512]
+        return self.text_encoder(inputs.input_ids)[0]
+
+    @torch.no_grad()
+    def forward(self, prompts):
+        """Sampling Loop conditioned on a list of strings"""
+        device = self.device
+        batch_size = len(prompts)
+        encoder_hidden_states = self._get_text_embeddings(prompts)
+
+        self.scheduler.set_timesteps(1000)
+        latent_size = self.model.config.sample_size
+        images = torch.randn((batch_size, 3, latent_size, latent_size), device=device)
+
+        for t in self.scheduler.timesteps:
+            # UNet2DConditionModel requires encoder_hidden_states
+            model_output = self.model(
+                images, t, encoder_hidden_states=encoder_hidden_states
+            ).sample
+            images = self.scheduler.step(model_output, t, images).prev_sample
+
+        images = (images / 2 + 0.5).clamp(0, 1)
+        return (images * 255).to(torch.uint8)
+
+    def on_train_start(self):
+        # Prime FID with real images from the train dataloader once
+        # FID only needs the images to establish the 'real' distribution baseline
+        print("Priming FID with real images...")
+
+        # Access the dataloader through Lightning's trainer
+        train_loader = self.trainer.train_dataloader
+
+        for i, batch in enumerate(train_loader):
+            if i >= 10:
+                break
+
+            # In your text-conditioned setup, batch is (images, prompts)
+            # We only need the images (index 0)
+            images = batch[0] if isinstance(batch, (list, tuple)) else batch
+
+            # Rescale from [-1, 1] to [0, 1] and convert to uint8 as required by torchmetrics FID
+            real_uint8 = ((images / 2 + 0.5).clamp(0, 1) * 255).to(torch.uint8)
+
+            # Update the FID metric with real samples
+            # The metric handles the internal InceptionV3 forward pass
+            self.fid.update(real_uint8.to(self.device), real=True)
+
+    def training_step(self, batch, batch_idx):
+        images, prompts = batch  # Assumes dataloader returns (Image, String)
+
+        # Classifier-Free Guidance
+        p_drop = 0.1
+        prompts = [p if random.random() > p_drop else "" for p in prompts]
+
+        noise = torch.randn_like(images)
+        timesteps = torch.randint(
+            0,
+            self.scheduler.config.num_train_timesteps,
+            (images.shape[0],),
+            device=self.device,
+        ).long()
+        noisy_latents = self.scheduler.add_noise(images, noise, timesteps)
+
+        # Get text conditioning
+        encoder_hidden_states = self._get_text_embeddings(prompts)
+
+        # Predict noise
+        noise_pred = self.model(
+            noisy_latents, timesteps, encoder_hidden_states=encoder_hidden_states
+        ).sample
+
+        loss = F.mse_loss(noise_pred, noise)
+        self.log("train/loss", loss, prog_bar=True, batch_size=len(prompts))
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        images, prompts = batch
+        encoder_hidden_states = self._get_text_embeddings(prompts)
+
+        noise = torch.randn_like(images)
+        timesteps = torch.full((images.shape[0],), 500, device=self.device).long()
+
+        noisy_images = self.scheduler.add_noise(images, noise, timesteps)
+        noise_pred = self.model(
+            noisy_images, timesteps, encoder_hidden_states=encoder_hidden_states
+        ).sample
+        loss = torch.nn.functional.mse_loss(noise_pred, noise)
+
+        self.log("val/loss", loss, batch_size=len(prompts))
+
+    def on_validation_epoch_end(self):
+        if self.current_epoch > 0:
+            self.fid.reset()
+            # Generate a small sample for FID using fixed prompts
+            test_prompts = ["a dog"] * 32 + ["an airplane"] * 32
+            fake_images = self.forward(test_prompts)
+            self.fid.update(fake_images.to(self.device), real=False)
+            self.log(
+                "val/fid",
+                self.fid.compute(),
+                prog_bar=True,
+                sync_dist=True,
+                batch_size=len(test_prompts),
+            )
 
     def configure_optimizers(self):
         return torch.optim.AdamW(self.model.parameters(), lr=2e-5)
