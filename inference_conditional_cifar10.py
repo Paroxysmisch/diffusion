@@ -36,7 +36,7 @@ def run_inference(checkpoint_path, output_dir, batch_size, num_images, prompt):
 
             # The forward method returns uint8 [0, 255]
             # torchvision.utils.save_image expects floats [0, 1]
-            images_uint8 = model(batch_size=prompt * current_batch)
+            images_uint8 = model(prompts=[prompt] * current_batch)
             images_float = images_uint8.float() / 255.0
 
             for i in range(images_float.size(0)):
