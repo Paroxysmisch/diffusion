@@ -5,17 +5,18 @@ import torch
 from torchvision.utils import save_image
 
 from main import Hyperparameters
-from modules import UNet2DDiffusionModel
+from modules import UNet2DConditionDiffusionModel
 
 
-def run_inference(checkpoint_path, output_dir, batch_size, num_images):
+def run_inference(checkpoint_path, output_dir, batch_size, num_images, prompt):
     # 1. Setup device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    torch.set_float32_matmul_precision("medium")
 
     # 2. Load the model from checkpoint
     # We use map_location to ensure it loads correctly regardless of where it was saved
-    model = UNet2DDiffusionModel.load_from_checkpoint(
+    model = UNet2DConditionDiffusionModel.load_from_checkpoint(
         checkpoint_path, map_location=device
     )
     model.to(device)
@@ -35,7 +36,7 @@ def run_inference(checkpoint_path, output_dir, batch_size, num_images):
 
             # The forward method returns uint8 [0, 255]
             # torchvision.utils.save_image expects floats [0, 1]
-            images_uint8 = model(batch_size=current_batch)
+            images_uint8 = model(batch_size=prompt * current_batch)
             images_float = images_uint8.float() / 255.0
 
             for i in range(images_float.size(0)):
@@ -65,6 +66,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num_images", type=int, default=64, help="Total number of images to generate"
     )
+    parser.add_argument(
+        "--prompt",
+        type=str,
+        default="an airplane",
+        help="Text prompt to condition image generation",
+    )
 
     args = parser.parse_args()
-    run_inference(args.ckpt, args.out, args.batch_size, args.num_images)
+    run_inference(args.ckpt, args.out, args.batch_size, args.num_images, args.prompt)
