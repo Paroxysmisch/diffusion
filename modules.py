@@ -171,7 +171,7 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
             in_channels=4,
             out_channels=4,
             layers_per_block=2,
-            block_out_channels=(128, 256, 256, 256),
+            block_out_channels=(128, 256),
             down_block_types=(
                 "CrossAttnDownBlock2D",  # Use CrossAttn blocks for text
                 "DownBlock2D",
