@@ -171,14 +171,18 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
             in_channels=4,
             out_channels=4,
             layers_per_block=2,
-            block_out_channels=(128, 256),
+            block_out_channels=(128, 256, 512, 512),
             down_block_types=(
-                "CrossAttnDownBlock2D",  # Use CrossAttn blocks for text
-                "DownBlock2D",
+                "CrossAttnDownBlock2D",  # 64x64
+                "CrossAttnDownBlock2D",  # 32x32
+                "CrossAttnDownBlock2D",  # 16x16
+                "DownBlock2D",           # 8x8 (Bottleneck)
             ),
             up_block_types=(
-                "UpBlock2D",
-                "CrossAttnUpBlock2D",
+                "UpBlock2D",             # 8x8
+                "CrossAttnUpBlock2D",    # 16x16
+                "CrossAttnUpBlock2D",    # 32x32
+                "CrossAttnUpBlock2D",    # 64x64
             ),
             cross_attention_dim=512,  # Must match CLIP-base output dim
             dropout=0.1,
@@ -197,7 +201,7 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
             prediction_type="epsilon",
         )
 
-        self.fid = FrechetInceptionDistance(feature=64, reset_real_features=False)
+        self.fid = FrechetInceptionDistance(feature=2048, reset_real_features=False)
         self.save_hyperparameters()
 
     def _get_text_embeddings(self, prompts):

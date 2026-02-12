@@ -14,9 +14,9 @@ from modules import UNet2DConditionDiffusionModel
 
 @dataclasses.dataclass
 class Hyperparameters:
-    batch_size: int = 768
+    batch_size: int = 64
     num_timesteps: int = 1000
-    resolution: int = 128
+    resolution: int = 512
 
 
 def coco_collate_fn(batch):
@@ -86,13 +86,13 @@ def main():
         every_n_epochs=10,
         monitor="val/loss",
         mode="min",
-        save_top_k=5,  # Set to -1 to keep all checkpoints, or n to keep the n best
+        save_top_k=-1,  # Set to -1 to keep all checkpoints, or n to keep the n best
     )
 
     ema_callback = EMACallback(decay=0.9999)
 
     trainer = L.Trainer(
-        max_epochs=750,
+        max_epochs=250,
         logger=wandb_logger,
         check_val_every_n_epoch=10,
         accelerator="cuda",
