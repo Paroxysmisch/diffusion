@@ -5,7 +5,7 @@ import torch
 from torchvision.utils import save_image
 
 from main import Hyperparameters
-from modules import UNet2DConditionDiffusionModel
+from modules import UNet2DConditionPixelDiffusionModel
 
 
 def run_inference(checkpoint_path, output_dir, batch_size, num_images, prompt):
@@ -16,7 +16,7 @@ def run_inference(checkpoint_path, output_dir, batch_size, num_images, prompt):
 
     # 2. Load the model from checkpoint
     # We use map_location to ensure it loads correctly regardless of where it was saved
-    model = UNet2DConditionDiffusionModel.load_from_checkpoint(
+    model = UNet2DConditionPixelDiffusionModel.load_from_checkpoint(
         checkpoint_path, map_location=device
     )
     model.to(device)

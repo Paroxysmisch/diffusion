@@ -378,7 +378,7 @@ class UNet2DConditionPixelDiffusionModel(L.LightningModule):
             prediction_type="epsilon",
         )
 
-        self.fid = FrechetInceptionDistance(feature=256, reset_real_features=False)
+        self.fid = FrechetInceptionDistance(feature=192, reset_real_features=False)
         self.save_hyperparameters()
 
     def _get_text_embeddings(self, prompts):
