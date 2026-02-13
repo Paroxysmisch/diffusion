@@ -52,6 +52,7 @@ class EMACallback(Callback):
             pl_module.load_state_dict(self.original_weights)
             self.original_weights = None  # Clear ref to free CPU memory
 
+
 def main():
     torch.set_float32_matmul_precision("medium")
     hyperparameters = Hyperparameters()

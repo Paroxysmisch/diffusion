@@ -397,23 +397,48 @@ class UNet2DConditionPixelDiffusionModel(L.LightningModule):
         return self.text_encoder(inputs.input_ids)[0]
 
     @torch.no_grad()
-    def forward(self, prompts):
-        """Sampling Loop conditioned on a list of strings"""
+    def forward(self, prompts, guidance_scale=7.5):
+        """Sampling Loop with Classifier-Free Guidance"""
         device = self.device
         batch_size = len(prompts)
-        encoder_hidden_states = self._get_text_embeddings(prompts)
+
+        # 1. Prepare conditional embeddings
+        cond_embeddings = self._get_text_embeddings(prompts)
+
+        # 2. Prepare unconditional (null) embeddings
+        # Using empty strings as the null prompt
+        uncond_embeddings = self._get_text_embeddings([""] * batch_size)
+
+        # Concatenate for a single batch pass: [Uncond, Cond]
+        # This doubles the effective batch size for the UNet
+        text_embeddings = torch.cat([uncond_embeddings, cond_embeddings])
 
         self.scheduler.set_timesteps(1000)
         latent_size = self.model.config.sample_size
         images = torch.randn((batch_size, 3, latent_size, latent_size), device=device)
 
         for t in self.scheduler.timesteps:
-            # UNet2DConditionModel requires encoder_hidden_states
-            model_output = self.model(
-                images, t, encoder_hidden_states=encoder_hidden_states
-            ).sample
-            images = self.scheduler.step(model_output, t, images).prev_sample
+            # Expand images for classifier-free guidance pass
+            # [batch, 3, H, W] -> [batch * 2, 3, H, W]
+            model_input = torch.cat([images] * 2)
 
+            # Predict noise
+            model_output = self.model(
+                model_input, t, encoder_hidden_states=text_embeddings
+            ).sample
+
+            # Split output into unconditional and conditional
+            noise_pred_uncond, noise_pred_cond = model_output.chunk(2)
+
+            # Perform Guidance: noise = uncond + scale * (cond - uncond)
+            noise_pred = noise_pred_uncond + guidance_scale * (
+                noise_pred_cond - noise_pred_uncond
+            )
+
+            # Compute previous noisy sample
+            images = self.scheduler.step(noise_pred, t, images).prev_sample
+
+        # Post-process
         images = (images / 2 + 0.5).clamp(0, 1)
         return (images * 255).to(torch.uint8)
 

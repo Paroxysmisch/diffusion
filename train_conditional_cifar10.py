@@ -56,7 +56,8 @@ def main():
     torch.set_float32_matmul_precision("medium")
     hyperparameters = Hyperparameters()
     wandb_logger = WandbLogger(
-        project="diffusion-conditional-cifar10", entity="paroxysmisch-university-of-cambridge"
+        project="diffusion-conditional-cifar10",
+        entity="paroxysmisch-university-of-cambridge",
     )
 
     transform = transforms.Compose(
