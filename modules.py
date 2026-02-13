@@ -354,16 +354,18 @@ class UNet2DConditionPixelDiffusionModel(L.LightningModule):
             in_channels=3,
             out_channels=3,
             layers_per_block=2,
-            block_out_channels=(128, 256, 512),
+            block_out_channels=(128, 256, 512, 512),
             down_block_types=(
-                "CrossAttnDownBlock2D",  # 32x32
-                "CrossAttnDownBlock2D",  # 16x16
-                "DownBlock2D",  # 8x8 (Bottleneck)
+                "DownBlock2D",
+                "AttnDownBlock2D",
+                "DownBlock2D",
+                "CrossAttnDownBlock2D",
             ),
             up_block_types=(
-                "UpBlock2D",  # 8x8
-                "CrossAttnUpBlock2D",  # 16x16
-                "CrossAttnUpBlock2D",  # 32x32
+                "CrossAttnUpBlock2D",
+                "UpBlock2D",
+                "AttnUpBlock2D",
+                "UpBlock2D",
             ),
             cross_attention_dim=512,  # Must match CLIP-base output dim
             dropout=0.1,
@@ -497,4 +499,4 @@ class UNet2DConditionPixelDiffusionModel(L.LightningModule):
             )
 
     def configure_optimizers(self):
-        return torch.optim.AdamW(self.model.parameters(), lr=2e-5)
+        return torch.optim.AdamW(self.model.parameters(), lr=5e-5)
