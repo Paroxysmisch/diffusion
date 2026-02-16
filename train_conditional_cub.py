@@ -5,19 +5,20 @@ from pathlib import Path
 
 import lightning as L
 import torch
-from lightning.pytorch.callbacks import ModelCheckpoint
+from lightning.pytorch.callbacks import Callback, ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
 from PIL import Image
 from torch.utils.data import DataLoader, Subset
 from torchvision import transforms
 
+import wandb
 from main import EMACallback
 from modules import UNet2DConditionDiffusionModel
 
 
 @dataclasses.dataclass
 class Hyperparameters:
-    batch_size: int = 64
+    batch_size: int = 128
     num_timesteps: int = 1000
     resolution: int = 256
 
@@ -58,6 +59,44 @@ class DetailedTextConditionedCUB(torch.utils.data.Dataset):
             prompt = rel_path.parent.name.split(".")[-1].replace("_", " ").lower()
 
         return image, prompt
+
+
+class DiffusionVisualizerCallback(Callback):
+    def __init__(self, num_samples=4):
+        super().__init__()
+        self.num_samples = num_samples
+        # Fixed prompts to track progress consistently
+        self.test_prompts = [
+            "a photo of a bright red bird with a black beak",
+            "a small blue bird perched on a branch",
+            "a large yellow bird with long wings",
+            "a bird with brown feathers and a white breast",
+        ][:num_samples]
+
+    @torch.no_grad()
+    def on_validation_epoch_end(self, trainer, pl_module):
+        # Ensure we are in eval mode
+        pl_module.eval()
+
+        # Generate images using the CFG forward pass
+        # This will use the guidance_scale=7.5 by default
+        images_uint8 = pl_module(self.test_prompts)
+
+        # Convert to a format Wandb likes (List of Wandb Images)
+        images_to_log = [
+            wandb.Image(img.permute(1, 2, 0).cpu().numpy(), caption=prompt)
+            for img, prompt in zip(images_uint8, self.test_prompts)
+        ]
+
+        # Log to the existing wandb logger
+        trainer.logger.experiment.log(
+            {
+                "samples/generated_birds": images_to_log,
+                "global_step": trainer.global_step,
+            }
+        )
+
+        pl_module.train()
 
 
 def main():
@@ -116,12 +155,14 @@ def main():
 
     ema_callback = EMACallback(decay=0.9999)
 
+    visualizer_callback = DiffusionVisualizerCallback(num_samples=4)
+
     trainer = L.Trainer(
         max_epochs=250,
         logger=wandb_logger,
         check_val_every_n_epoch=10,
         accelerator="cuda",
-        callbacks=[checkpoint_callback, ema_callback],
+        callbacks=[checkpoint_callback, ema_callback, visualizer_callback],
     )
 
     model = UNet2DConditionDiffusionModel(hp)

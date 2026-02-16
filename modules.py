@@ -173,16 +173,16 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
             layers_per_block=2,
             block_out_channels=(128, 256, 512, 512),
             down_block_types=(
-                "CrossAttnDownBlock2D",  # 64x64
-                "CrossAttnDownBlock2D",  # 32x32
-                "CrossAttnDownBlock2D",  # 16x16
-                "DownBlock2D",  # 8x8 (Bottleneck)
+                "DownBlock2D",
+                "AttnDownBlock2D",
+                "DownBlock2D",
+                "CrossAttnDownBlock2D",
             ),
             up_block_types=(
-                "UpBlock2D",  # 8x8
-                "CrossAttnUpBlock2D",  # 16x16
-                "CrossAttnUpBlock2D",  # 32x32
-                "CrossAttnUpBlock2D",  # 64x64
+                "CrossAttnUpBlock2D",
+                "UpBlock2D",
+                "AttnUpBlock2D",
+                "UpBlock2D",
             ),
             cross_attention_dim=512,  # Must match CLIP-base output dim
             dropout=0.1,
@@ -201,7 +201,7 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
             prediction_type="epsilon",
         )
 
-        self.fid = FrechetInceptionDistance(feature=2048, reset_real_features=False)
+        self.fid = FrechetInceptionDistance(feature=192, reset_real_features=False)
         self.save_hyperparameters()
 
     def _get_text_embeddings(self, prompts):
@@ -218,29 +218,52 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
         return self.text_encoder(inputs.input_ids)[0]
 
     @torch.no_grad()
-    def forward(self, prompts):
-        """Sampling Loop conditioned on a list of strings"""
+    def forward(self, prompts, guidance_scale=7.5):
+        """Sampling Loop with Classifier-Free Guidance in Latent Space"""
         device = self.device
         batch_size = len(prompts)
-        encoder_hidden_states = self._get_text_embeddings(prompts)
 
+        # 1. Prepare conditional and unconditional text embeddings
+        # We concatenate them to run them through the UNet in a single batch for efficiency
+        cond_embeddings = self._get_text_embeddings(prompts)
+        uncond_embeddings = self._get_text_embeddings([""] * batch_size)
+        text_embeddings = torch.cat([uncond_embeddings, cond_embeddings])
+
+        # 2. Setup Scheduler and Initial Latents
         self.scheduler.set_timesteps(1000)
         latent_size = self.model.config.sample_size
-        latents = torch.randn(
-            (len(prompts), 4, latent_size, latent_size), device=self.device
-        )
+        # Usually 4 channels for VAE latents
+        latents = torch.randn((batch_size, 4, latent_size, latent_size), device=device)
 
+        # 3. Diffusion Iteration
         for t in self.scheduler.timesteps:
-            # UNet2DConditionModel requires encoder_hidden_states
-            model_output = self.model(
-                latents, t, encoder_hidden_states=encoder_hidden_states
-            ).sample
-            latents = self.scheduler.step(model_output, t, latents).prev_sample
+            # Expand latents for dual pass: [uncond_latents, cond_latents]
+            # This allows us to predict noise for both prompts simultaneously
+            latent_model_input = torch.cat([latents] * 2)
 
-        # 4. Decode latents back to pixels
+            # Predict noise residual
+            model_output = self.model(
+                latent_model_input, t, encoder_hidden_states=text_embeddings
+            ).sample
+
+            # Separate the prediction into unconditional and conditional parts
+            noise_pred_uncond, noise_pred_cond = model_output.chunk(2)
+
+            # Apply Classifier-Free Guidance formula:
+            # noise = uncond + scale * (cond - uncond)
+            noise_pred = noise_pred_uncond + guidance_scale * (
+                noise_pred_cond - noise_pred_uncond
+            )
+
+            # Update latents using the scheduler
+            latents = self.scheduler.step(noise_pred, t, latents).prev_sample
+
+        # 4. Decode latents back to pixels using VAE
+        # Apply the scaling factor (standard for Stable Diffusion-like models)
         latents = 1 / self.vae.config.scaling_factor * latents
         image = self.vae.decode(latents).sample
 
+        # 5. Normalize and convert to [0, 255] uint8
         image = (image / 2 + 0.5).clamp(0, 1)
         return (image * 255).to(torch.uint8)
 
@@ -253,7 +276,7 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
         train_loader = self.trainer.train_dataloader
 
         for i, batch in enumerate(train_loader):
-            if i >= 10:
+            if i >= 40:
                 break
 
             # In your text-conditioned setup, batch is (images, prompts)
@@ -321,7 +344,7 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
         if self.current_epoch > 0:
             self.fid.reset()
             # Generate a small sample for FID using fixed prompts
-            test_prompts = ["a dog"] * 32 + ["an airplane"] * 32
+            test_prompts = ["a blue bird"] * 32 + ["a red bird"] * 32
             fake_images = self.forward(test_prompts)
             self.fid.update(fake_images.to(self.device), real=False)
             self.log(
