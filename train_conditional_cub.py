@@ -10,7 +10,7 @@ from lightning.pytorch.callbacks import (Callback, ModelCheckpoint,
 from lightning.pytorch.loggers import WandbLogger
 from PIL import Image
 from torch.optim.swa_utils import get_ema_avg_fn
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision import transforms
 
 import wandb
@@ -24,6 +24,9 @@ class Hyperparameters:
     resolution: int = 256
 
 
+torch.serialization.add_safe_globals([Hyperparameters])
+
+
 class EMACallback(WeightAveraging):
     def __init__(self, decay=0.9999):
         super().__init__(avg_fn=get_ema_avg_fn(decay=decay))
@@ -33,40 +36,65 @@ class EMACallback(WeightAveraging):
         return (epoch_idx is not None) and (epoch_idx >= 10)
 
 
-class DetailedTextConditionedCUB(torch.utils.data.Dataset):
+class DetailedTextConditionedCUB(Dataset):
     def __init__(self, img_root, text_root, transform=None):
         self.img_root = Path(img_root)
         self.text_root = Path(text_root)
         self.transform = transform
 
-        # Gather all image paths
-        self.image_paths = sorted(list(self.img_root.glob("**/*.jpg")))
+        self.image_paths = sorted(self.img_root.glob("**/*.jpg"))
+
+        self.images = []
+        self.captions = []
+
+        print("Preloading dataset into RAM...")
+
+        for img_path in self.image_paths:
+            # Load image once
+            with Image.open(img_path) as img:
+                img = img.convert("RGB")
+                img_tensor = (
+                    torch.from_numpy(
+                        torch.ByteTensor(torch.ByteStorage.from_buffer(img.tobytes()))
+                        .view(img.size[1], img.size[0], 3)
+                        .numpy()
+                    )
+                    .permute(2, 0, 1)
+                    .contiguous()
+                )
+
+            self.images.append(img_tensor)  # uint8 tensor
+
+            # Load captions once
+            rel_path = img_path.relative_to(self.img_root)
+            text_path = self.text_root / rel_path.with_suffix(".txt")
+
+            if text_path.exists():
+                with open(text_path, "r") as f:
+                    descriptions = tuple(line.strip() for line in f if line.strip())
+            else:
+                fallback = rel_path.parent.name.split(".")[-1].replace("_", " ").lower()
+                descriptions = (fallback,)
+
+            self.captions.append(descriptions)
+
+        print(f"Loaded {len(self.images)} samples into RAM.")
 
     def __len__(self):
-        return len(self.image_paths)
+        return len(self.images)
 
     def __getitem__(self, idx):
-        img_path = self.image_paths[idx]
+        img = self.images[idx]
+        captions = self.captions[idx]
 
-        # 1. Load Image
-        image = Image.open(img_path).convert("RGB")
+        # Convert to float only here (cheaper than storing float)
+        image = img.float().div_(255.0)
+
         if self.transform:
             image = self.transform(image)
 
-        # 2. Map Image path to Text path
-        # Example: .../images/001.Black_footed_Albatross/Bird_0001.jpg
-        # -> .../text_c10/001.Black_footed_Albatross/Bird_0001.txt
-        rel_path = img_path.relative_to(self.img_root)
-        text_path = self.text_root / rel_path.with_suffix(".txt")
-
-        # 3. Randomly pick one description from the file
-        try:
-            with open(text_path, "r") as f:
-                descriptions = [line.strip() for line in f.readlines() if line.strip()]
-            prompt = random.choice(descriptions)
-        except FileNotFoundError:
-            # Fallback if text is missing: use cleaned folder name
-            prompt = rel_path.parent.name.split(".")[-1].replace("_", " ").lower()
+        # Fast random sampling
+        prompt = captions[random.randint(0, len(captions) - 1)]
 
         return image, prompt
 
@@ -144,9 +172,15 @@ def main():
         shuffle=True,
         num_workers=32,
         pin_memory=True,
+        persistent_workers=True,
     )
     val_loader = DataLoader(
-        val_ds, batch_size=hp.batch_size, shuffle=False, num_workers=32, pin_memory=True
+        val_ds,
+        batch_size=hp.batch_size,
+        shuffle=False,
+        num_workers=16,
+        pin_memory=True,
+        persistent_workers=True,
     )
 
     wandb_logger = WandbLogger(
