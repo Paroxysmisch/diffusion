@@ -5,14 +5,15 @@ from pathlib import Path
 
 import lightning as L
 import torch
-from lightning.pytorch.callbacks import Callback, ModelCheckpoint
+from lightning.pytorch.callbacks import (Callback, ModelCheckpoint,
+                                         WeightAveraging)
 from lightning.pytorch.loggers import WandbLogger
 from PIL import Image
+from torch.optim.swa_utils import get_ema_avg_fn
 from torch.utils.data import DataLoader, Subset
 from torchvision import transforms
 
 import wandb
-from main import EMACallback
 from modules import UNet2DConditionDiffusionModel
 
 
@@ -21,6 +22,15 @@ class Hyperparameters:
     batch_size: int = 128
     num_timesteps: int = 1000
     resolution: int = 256
+
+
+class EMACallback(WeightAveraging):
+    def __init__(self, decay=0.9999):
+        super().__init__(avg_fn=get_ema_avg_fn(decay=decay))
+
+    def should_update(self, step_idx=None, epoch_idx=None):
+        # Start after 10 epochs.
+        return (epoch_idx is not None) and (epoch_idx >= 10)
 
 
 class DetailedTextConditionedCUB(torch.utils.data.Dataset):
@@ -146,7 +156,7 @@ def main():
 
     checkpoint_callback = ModelCheckpoint(
         dirpath="checkpoints/",
-        filename="diffusion-conditional-cifar10-{epoch:04d}",
+        filename="diffusion-conditional-cub-{epoch:04d}",
         every_n_epochs=10,
         monitor="val/loss",
         mode="min",
@@ -158,7 +168,7 @@ def main():
     visualizer_callback = DiffusionVisualizerCallback(num_samples=4)
 
     trainer = L.Trainer(
-        max_epochs=250,
+        max_epochs=750,
         logger=wandb_logger,
         check_val_every_n_epoch=10,
         accelerator="cuda",

@@ -24,85 +24,81 @@ class EMACallback(Callback):
         super().__init__()
         self.decay = decay
         self.use_num_updates = use_num_updates
-
         self.ema_params = {}
-        self.backup_params = {}
         self.num_updates = 0
-
-    # Initialization
-    def on_fit_start(self, trainer, pl_module):
-        if not self.ema_params:
-            self._init_ema(pl_module)
+        self.is_swapped = False
 
     def _init_ema(self, pl_module):
+        # Initialize EMA weights on the same device as the model
         self.ema_params = {
-            name: p.detach().clone()
+            name: p.data.clone().detach().to(pl_module.device)
             for name, p in pl_module.named_parameters()
             if p.requires_grad
         }
 
-    # EMA update
-    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+    def on_fit_start(self, trainer, pl_module):
         if not self.ema_params:
-            return
+            self._init_ema(pl_module)
 
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         self.num_updates += 1
-
         decay = self.decay
         if self.use_num_updates:
-            # Optional bias correction for early training stability
-            decay = min(
-                self.decay,
-                (1 + self.num_updates) / (10 + self.num_updates),
-            )
+            # Dynamic decay: starts low to follow model, ends high to stabilize
+            decay = min(self.decay, (1 + self.num_updates) / (10 + self.num_updates))
 
         with torch.no_grad():
             for name, p in pl_module.named_parameters():
-                if not p.requires_grad:
-                    continue
+                if name in self.ema_params:
+                    ema_p = self.ema_params[name]
+                    # In-place update: ema = ema * decay + p * (1 - decay)
+                    ema_p.mul_(decay).add_(p.data, alpha=1 - decay)
 
-                ema_p = self.ema_params[name]
-                ema_p.mul_(decay).add_(p.detach(), alpha=1 - decay)
+    def swap_weights(self, pl_module):
+        """Swaps model weights with EMA weights in-place to save memory."""
+        for name, p in pl_module.named_parameters():
+            if name in self.ema_params:
+                tmp = p.data.clone()
+                p.data.copy_(self.ema_params[name])
+                self.ema_params[name].copy_(tmp)
+        self.is_swapped = not self.is_swapped
 
-    # Swap to EMA for validation
+    # Evaluation & Inference Hooks
     def on_validation_start(self, trainer, pl_module):
-        if not self.ema_params:
-            return
+        if self.ema_params and not self.is_swapped:
+            self.swap_weights(pl_module)
 
-        self.backup_params = {}
-
-        for name, p in pl_module.named_parameters():
-            if name not in self.ema_params:
-                continue
-
-            self.backup_params[name] = p.data.clone()
-            p.data.copy_(self.ema_params[name])
-
-    # Restore training weights
     def on_validation_end(self, trainer, pl_module):
-        if not self.backup_params:
-            return
+        if self.is_swapped:
+            self.swap_weights(pl_module)
 
-        for name, p in pl_module.named_parameters():
-            if name in self.backup_params:
-                p.data.copy_(self.backup_params[name])
+    def on_test_start(self, trainer, pl_module):
+        if self.ema_params and not self.is_swapped:
+            self.swap_weights(pl_module)
 
-        self.backup_params = {}
+    def on_test_end(self, trainer, pl_module):
+        if self.is_swapped:
+            self.swap_weights(pl_module)
 
-    # Checkpoint integration
+    def on_predict_start(self, trainer, pl_module):
+        if self.ema_params and not self.is_swapped:
+            self.swap_weights(pl_module)
+
+    def on_predict_end(self, trainer, pl_module):
+        if self.is_swapped:
+            self.swap_weights(pl_module)
+
+    # Persistence & Device Management
     def state_dict(self):
         return {
             "ema_params": self.ema_params,
             "num_updates": self.num_updates,
-            "decay": self.decay,
         }
 
     def load_state_dict(self, state_dict):
         self.ema_params = state_dict["ema_params"]
         self.num_updates = state_dict["num_updates"]
-        self.decay = state_dict["decay"]
 
-    # Move EMA after restore
     def on_load_checkpoint(self, trainer, pl_module, checkpoint):
         device = pl_module.device
         for k in self.ema_params:
