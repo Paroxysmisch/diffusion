@@ -19,7 +19,7 @@ from modules import UNet2DConditionDiffusionModel
 
 @dataclasses.dataclass
 class Hyperparameters:
-    batch_size: int = 128
+    batch_size: int = 256
     num_timesteps: int = 1000
     resolution: int = 256
 
@@ -161,6 +161,7 @@ def main():
         monitor="val/loss",
         mode="min",
         save_top_k=10,  # Set to -1 to keep all checkpoints, or n to keep the n best
+        save_last=True,
     )
 
     ema_callback = EMACallback(decay=0.9999)

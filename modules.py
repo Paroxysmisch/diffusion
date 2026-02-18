@@ -356,7 +356,7 @@ class UNet2DConditionDiffusionModel(L.LightningModule):
             )
 
     def configure_optimizers(self):
-        return torch.optim.AdamW(self.model.parameters(), lr=2e-5)
+        return torch.optim.AdamW(self.model.parameters(), lr=4e-5)
 
 
 class UNet2DConditionPixelDiffusionModel(L.LightningModule):
